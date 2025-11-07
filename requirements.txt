@@ -1,0 +1,9 @@
+--find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
+torch==2.7.0+cu118
+torchaudio==2.7.0+cu118
+numpy
+lhotse
+huggingface_hub
+safetensors
+tensorboard
+vocos
