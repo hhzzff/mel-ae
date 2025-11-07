@@ -1,0 +1,9 @@
+{
+  "model" : {
+    "dim": 128
+  },
+  "feature" : {
+    "sampling_rate": 24000,
+    "type": "vocos"
+  }
+}

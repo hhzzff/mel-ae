@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
 import argparse
+import json
+import os
+import torch
+import logging
+import copy
 import torch.multiprocessing as mp
 from dataset.datamodule import TtsDataModule
+from shutil import copyfile
+from lhotse.utils import fix_random_seed
 from pathlib import Path
+from torch.utils.tensorboard import SummaryWriter
+from utils.checkpoint import (
+    resume_checkpoint,
+)
 from utils.common import (
     AttributeDict,
     str2bool,
     get_env_info,
+    setup_dist,
+    setup_logger,
 )
+from model.mel_ae import mel_ae
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -63,7 +77,7 @@ def get_parser():
     parser.add_argument(
         "--exp-dir",
         type=str,
-        default="exp/zipvoice",
+        default="exp/mel_ae",
         help="""The experiment dir.
         It specifies the directory where all training related
         files, e.g., checkpoints, log, etc, are saved
@@ -71,9 +85,20 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--base-lr", type=float, default=0.02, help="The base learning rate."
+    )
+    
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="The seed for random generators intended for reproducibility",
+    )
+
+    parser.add_argument(
         "--model-config",
         type=str,
-        default="conf/zipvoice_base.json",
+        default="conf/mel_ae_base.json",
         help="The model configuration file.",
     )
 
@@ -140,10 +165,121 @@ def run(rank, world_size, args):
       args:
         The return value of get_parser().parse_args()
     """
-    print("hello")
     params = get_params()
     params.update(vars(args))
 
+    with open(params.model_config, "r") as f:
+        model_config = json.load(f)
+    params.update(model_config["model"])
+    params.update(model_config["feature"])
+
+    fix_random_seed(params.seed)
+    if world_size > 1:
+        setup_dist(rank, world_size, params.master_port)
+
+    os.makedirs(f"{params.exp_dir}", exist_ok=True)
+    copyfile(src=params.model_config, dst=f"{params.exp_dir}/model.json")
+    setup_logger(f"{params.exp_dir}/log/log-train")
+
+    if args.tensorboard and rank == 0:
+        tb_writer = SummaryWriter(log_dir=f"{params.exp_dir}/tensorboard")
+    else:
+        tb_writer = None
+
+    if torch.cuda.is_available():
+        params.device = torch.device("cuda", rank)
+    else:
+        params.device = torch.device("cpu")
+    logging.info(f"Device: {params.device}")
+
+    logging.info(params)
+    logging.info("About to create model")
+
+    model = mel_ae(**model_config["model"])
+    model_avg: Optional[nn.Module] = None
+    if rank == 0:
+        # model_avg is only used with rank 0
+        model_avg = copy.deepcopy(model).to(torch.float64)
+    assert params.start_epoch > 0, params.start_epoch
+    if params.start_epoch > 1:
+        checkpoints = resume_checkpoint(params=params, model=model, model_avg=model_avg)
+    model = model.to(params.device)
+    if world_size > 1:
+        logging.info("Using DDP")
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=params.base_lr,
+    )
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+
+    if params.start_epoch > 1 and checkpoints is not None:
+        # load state_dict for optimizers
+        if "optimizer" in checkpoints:
+            logging.info("Loading optimizer state dict")
+            optimizer.load_state_dict(checkpoints["optimizer"])
+
+        # load state_dict for schedulers
+        if "scheduler" in checkpoints:
+            logging.info("Loading scheduler state dict")
+            scheduler.load_state_dict(checkpoints["scheduler"])
+    
+    datamodule = TtsDataModule(args)
+    train_cuts = datamodule.train_libritts_cuts()
+    dev_cuts = datamodule.dev_libritts_cuts()
+    
+    train_dl = datamodule.train_dataloaders(train_cuts)
+    valid_dl = datamodule.dev_dataloaders(dev_cuts)
+
+    logging.info("Training started")
+    for epoch in range(params.start_epoch, params.num_epochs + 1):
+        logging.info(f"Start epoch {epoch}")
+        fix_random_seed(params.seed + epoch - 1)
+        train_dl.sampler.set_epoch(epoch - 1)
+        params.cur_epoch = epoch
+        if tb_writer is not None:
+            tb_writer.add_scalar("train/epoch", epoch, params.batch_idx_train)
+        # train_one_epoch(
+        #     params=params,
+        #     model=model,
+        #     model_avg=model_avg,
+        #     optimizer=optimizer,
+        #     scheduler=scheduler,
+        #     train_dl=train_dl,
+        #     valid_dl=valid_dl,
+        #     scaler=scaler,
+        #     tb_writer=tb_writer,
+        #     world_size=world_size,
+        #     rank=rank,
+        # )
+        print(f"pretend train_one_epoch over")
+        filename = params.exp_dir / f"epoch-{params.cur_epoch}.pt"
+        # save_checkpoint(
+        #     filename=filename,
+        #     params=params,
+        #     model=model,
+        #     model_avg=model_avg,
+        #     optimizer=optimizer,
+        #     scheduler=scheduler,
+        #     sampler=train_dl.sampler,
+        #     scaler=scaler,
+        #     rank=rank,
+        # )
+        print(f"pretend save_checkpoint over")
+        if rank == 0:
+            if params.best_train_epoch == params.cur_epoch:
+                best_train_filename = params.exp_dir / "best-train-loss.pt"
+                copyfile(src=filename, dst=best_train_filename)
+
+            if params.best_valid_epoch == params.cur_epoch:
+                best_valid_filename = params.exp_dir / "best-valid-loss.pt"
+                copyfile(src=filename, dst=best_valid_filename)
+    
+    logging.info("Done!")
+
+    if world_size > 1:
+        torch.distributed.barrier()
+        cleanup_dist()
 
 def main():
     parser = get_parser()
