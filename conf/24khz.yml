@@ -1,0 +1,81 @@
+# Model setup
+MetaMel.latent_dim: 128
+MetaMel.depth: 8
+MetaMel.hidden_dim: 512
+MetaMel.sample_rate: 24000
+MetaMel.n_fft: 1024
+MetaMel.hop_length: 256
+MetaMel.n_mels: 100
+MetaMel.stride: 4
+MetaMel.min_SNR: 0.5
+
+# Discriminator
+# pass
+
+# Optimization
+AdamW.betas: [0.8, 0.99]
+AdamW.lr: 0.0001
+ExponentialLR.gamma: 0.999996
+
+
+device: cuda
+sample_rate: 24000
+val_batch_size: 100
+num_iters: 400000
+save_iters: [10000, 50000, 100000, 200000]
+valid_freq: 1000
+sample_freq: 10000
+num_workers: 32
+val_idx: [0, 1, 2, 3, 4, 5, 6, 7]
+seed: 0
+lambdas:
+  mel/loss: 15.0
+  adv/feat_loss: 2.0
+  adv/gen_loss: 1.0
+  rms/loss: 10.0
+
+# Transforms
+build_transform.preprocess:
+  - Identity
+build_transform.augment_prob: 0.0
+build_transform.augment:
+  - Identity
+build_transform.postprocess:
+  - VolumeNorm
+  - RescaleAudio
+  - ShiftPhase
+
+# Loss setup
+# pass
+
+# Data
+batch_size: 72
+train/AudioDataset.duration: 0.38
+train/AudioDataset.n_examples: 10000000
+
+val/AudioDataset.duration: 5.0
+val/build_transform.augment_prob: 1.0
+val/AudioDataset.n_examples: 250
+
+test/AudioDataset.duration: 10.0
+test/build_transform.augment_prob: 1.0
+test/AudioDataset.n_examples: 1000
+
+AudioLoader.shuffle: true
+AudioDataset.without_replacement: true
+
+train/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/train-clean-100
+    - download/LibriTTS/train-clean-360
+    - download/LibriTTS/train-other-500
+
+val/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/dev-clean
+    - download/LibriTTS/dev-other
+
+test/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/test-clean
+    - download/LibriTTS/test-other

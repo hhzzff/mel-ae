@@ -214,18 +214,14 @@ def cleanup_dist():
 
 
 def prepare_input(
-    params: AttributeDict,
     batch: dict,
     device: torch.device,
-    return_tokens: bool = True,
     return_feature: bool = True,
     return_audio: bool = False,
 ):
     """
     Parse the features and targets of the current batch.
     Args:
-      params:
-        It is returned by :func:`get_params`.
       batch:
         It is the return value from iterating
         `lhotse.dataset.K2SpeechRecognitionDataset`. See its documentation
@@ -235,13 +231,11 @@ def prepare_input(
     """
     return_list = []
 
-    if return_tokens:
-        return_list += [batch["tokens"]]
-
     if return_feature:
         features = batch["features"].to(device)
+        features = features.permute(0, 2, 1) # Permute to (B, C, T)
         features_lens = batch["features_lens"].to(device)
-        return_list += [features * params.feat_scale, features_lens]
+        return_list += [features, features_lens]
 
     if return_audio:
         return_list += [batch["audio"], batch["audio_lens"]]

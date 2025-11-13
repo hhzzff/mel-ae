@@ -1,0 +1,68 @@
+# Model setup
+# pass
+
+# Discriminator
+# pass
+
+# Optimization
+AdamW.betas: [0.8, 0.99]
+AdamW.lr: 0.0001
+ExponentialLR.gamma: 0.999996
+
+
+device: cuda
+sample_rate: 24000
+val_batch_size: 1
+num_iters: 4000
+save_iters: [100, 500, 1000, 2000]
+valid_freq: 10
+sample_freq: 100
+num_workers: 32
+val_idx: [0, 1, 2, 3, 4, 5, 6, 7]
+seed: 0
+lambdas:
+  mel/loss: 15.0
+  adv/feat_loss: 2.0
+  adv/gen_loss: 1.0
+
+# Transforms
+build_transform.preprocess:
+  - Identity
+build_transform.augment_prob: 0.0
+build_transform.augment:
+  - Identity
+build_transform.postprocess:
+  - VolumeNorm
+  - RescaleAudio
+  - ShiftPhase
+
+# Loss setup
+# pass
+
+# Data
+batch_size: 72
+train/AudioDataset.duration: 0.38
+train/AudioDataset.n_examples: 100000
+
+val/AudioDataset.duration: 5.0
+val/build_transform.augment_prob: 1.0
+val/AudioDataset.n_examples: 5
+
+test/AudioDataset.duration: 10.0
+test/build_transform.augment_prob: 1.0
+test/AudioDataset.n_examples: 10
+
+AudioLoader.shuffle: true
+AudioDataset.without_replacement: true
+
+train/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/train-clean-100
+
+val/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/dev-clean
+
+test/build_dataset.folders:
+  speech_libritts:
+    - download/LibriTTS/test-clean

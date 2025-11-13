@@ -38,7 +38,7 @@ def ExponentialLR(optimizer, gamma: float = 1.0):
     return torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma)
 
 # Models
-MetaMel = argbind.bind(model.MetaMel)
+MetaMelVAE = argbind.bind(model.MetaMelVAE)
 Discriminator = argbind.bind(model.Discriminator)
 
 # Data
@@ -55,7 +55,7 @@ tfm = argbind.bind_module(transforms, "train", "val", filter_fn=filter_fn)
 
 # Loss
 filter_fn = lambda fn: hasattr(fn, "forward") and "Loss" in fn.__name__
-losses = argbind.bind_module(model.loss, filter_fn=filter_fn)
+losses = argbind.bind_module(model.lossVAE, filter_fn=filter_fn)
 
 def get_infinite_loader(dataloader):
     while True:
@@ -99,7 +99,7 @@ def build_dataset(
 
 @dataclass
 class State:
-    generator: MetaMel
+    generator: MetaMelVAE
     optimizer_g: AdamW
     scheduler_g: ExponentialLR
 
@@ -109,7 +109,7 @@ class State:
 
     mel_loss: losses.MelSpectrogramLoss
     gan_loss: losses.GANLoss
-    rms_loss: losses.BatchRMSLoss
+    kl_loss: losses.KLLoss
 
     train_data: AudioDataset
     val_data: AudioDataset
@@ -137,12 +137,12 @@ def load(
             "package": not load_weights,
         }
         tracker.print(f"Resuming from {str(Path('.').absolute())}/{kwargs['folder']}")
-        if (Path(kwargs["folder"]) / "MetaMel").exists():
-            generator, g_extra = MetaMel.load_from_folder(**kwargs)
+        if (Path(kwargs["folder"]) / "MetaMelVAE").exists():
+            generator, g_extra = MetaMelVAE.load_from_folder(**kwargs)
         if (Path(kwargs["folder"]) / "discriminator").exists():
             discriminator, d_extra = Discriminator.load_from_folder(**kwargs)
 
-    generator = MetaMel() if generator is None else generator
+    generator = MetaMelVAE() if generator is None else generator
     discriminator = Discriminator() if discriminator is None else discriminator
 
     tracker.print(generator)
@@ -178,7 +178,7 @@ def load(
 
     mel_loss = losses.MelSpectrogramLoss()
     gan_loss = losses.GANLoss(discriminator)
-    rms_loss = losses.BatchRMSLoss()
+    kl_loss = losses.KLLoss()
 
     return State(
         generator=generator,
@@ -189,7 +189,7 @@ def load(
         scheduler_d=scheduler_d,
         mel_loss=mel_loss,
         gan_loss=gan_loss,
-        rms_loss=rms_loss,
+        kl_loss=kl_loss,
         tracker=tracker,
         train_data=train_data,
         val_data=val_data,
@@ -248,7 +248,9 @@ def train_loop(state, batch, accel, lambdas):
             output["adv/gen_loss"],
             output["adv/feat_loss"],
         ) = state.gan_loss.generator_loss(out["mel_out"], out["mel_in"])
-        output["rms/loss"], output["rms/value"] = state.rms_loss(out["z"])
+        output["kl/loss"] = state.kl_loss(out["z"], out["logvar"])
+        output["kl/value/logvar"] = torch.mean(out["logvar"]).detach()
+        output["kl/value/mu"] = torch.mean(out["z"]).detach()
         output["loss"] = sum([v * output[k] for k, v in lambdas.items() if k in output])
 
     state.optimizer_g.zero_grad()
@@ -354,7 +356,7 @@ def train(
         "mel/loss": 100.0,
         "adv/feat_loss": 2.0,
         "adv/gen_loss": 1.0,
-        "rms/loss": 10.0,
+        "kl/loss": 10.0,
     },
 ):
     util.seed(seed)

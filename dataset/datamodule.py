@@ -66,89 +66,29 @@ class TtsDataModule:
     This class should be derived for specific corpora used in ASR tasks.
     """
 
-    def __init__(self, args: argparse.Namespace):
-        self.args = args
-
-    @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser):
-        group = parser.add_argument_group(
-            title="TTS data related options",
-            description="These options are used for the preparation of "
-            "PyTorch DataLoaders from Lhotse CutSet's -- they control the "
-            "effective batch sizes, sampling strategies, applied data "
-            "augmentations, etc.",
-        )
-        group.add_argument(
-            "--manifest-dir",
-            type=Path,
-            default=Path("data/fbank"),
-            help="Path to directory with train/valid/test cuts.",
-        )
-        group.add_argument(
-            "--max-duration",
-            type=int,
-            default=200.0,
-            help="Maximum pooled recordings duration (seconds) in a "
-            "single batch. You can reduce it if it causes CUDA OOM.",
-        )
-        group.add_argument(
-            "--bucketing-sampler",
-            type=str2bool,
-            default=True,
-            help="When enabled, the batches will come from buckets of "
-            "similar duration (saves padding frames).",
-        )
-        group.add_argument(
-            "--num-buckets",
-            type=int,
-            default=30,
-            help="The number of buckets for the DynamicBucketingSampler"
-            "(you might want to increase it for larger datasets).",
-        )
-
-        group.add_argument(
-            "--on-the-fly-feats",
-            type=str2bool,
-            default=False,
-            help="When enabled, use on-the-fly cut mixing and feature "
-            "extraction. Will drop existing precomputed feature manifests "
-            "if available.",
-        )
-        group.add_argument(
-            "--shuffle",
-            type=str2bool,
-            default=True,
-            help="When enabled (=default), the examples will be "
-            "shuffled for each epoch.",
-        )
-        group.add_argument(
-            "--drop-last",
-            type=str2bool,
-            default=True,
-            help="Whether to drop last batch. Used by sampler.",
-        )
-        group.add_argument(
-            "--return-cuts",
-            type=str2bool,
-            default=False,
-            help="When enabled, each batch will have the "
-            "field: batch['cut'] with the cuts that "
-            "were used to construct it.",
-        )
-        group.add_argument(
-            "--num-workers",
-            type=int,
-            default=8,
-            help="The number of training dataloader workers that "
-            "collect the batches.",
-        )
-
-        group.add_argument(
-            "--input-strategy",
-            type=str,
-            default="PrecomputedFeatures",
-            help="AudioSamples or PrecomputedFeatures",
-        )
+    def __init__(
+        self,
+        manifest_dir: str = "data/fbank",
+        max_duration: float = 200.0,
+        bucketing_sampler: bool = True,
+        num_buckets: int = 30,
+        on_the_fly_feats: bool = False,
+        shuffle: bool = True,
+        drop_last: bool = True,
+        return_cuts: bool = False,
+        num_workers: int = 8,
+        input_strategy: str = "PrecomputedFeatures",
+    ):
+        self.manifest_dir = Path(manifest_dir)
+        self.max_duration = max_duration
+        self.bucketing_sampler = bucketing_sampler
+        self.num_buckets = num_buckets
+        self.on_the_fly_feats = on_the_fly_feats
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.return_cuts = return_cuts
+        self.num_workers = num_workers
+        self.input_strategy = input_strategy
 
     def train_dataloaders(
         self,
@@ -166,31 +106,30 @@ class TtsDataModule:
 
         train = SpeechSynthesisDataset(
             return_text=True,
-            return_tokens=True,
             return_spk_ids=True,
             feature_input_strategy=OnTheFlyFeatures(VocosFbank())
-            if self.args.on_the_fly_feats
+            if self.on_the_fly_feats
             else PrecomputedFeatures(),
-            return_cuts=self.args.return_cuts,
+            return_cuts=self.return_cuts,
         )
 
-        if self.args.bucketing_sampler:
+        if self.bucketing_sampler:
             logging.info("Using DynamicBucketingSampler.")
             train_sampler = DynamicBucketingSampler(
                 cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
-                num_buckets=self.args.num_buckets,
-                buffer_size=self.args.num_buckets * 2000,
-                shuffle_buffer_size=self.args.num_buckets * 5000,
-                drop_last=self.args.drop_last,
+                max_duration=self.max_duration,
+                shuffle=self.shuffle,
+                num_buckets=self.num_buckets,
+                buffer_size=self.num_buckets * 2000,
+                shuffle_buffer_size=self.num_buckets * 5000,
+                drop_last=self.drop_last,
             )
         else:
             logging.info("Using SimpleCutSampler.")
             train_sampler = SimpleCutSampler(
                 cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
+                max_duration=self.max_duration,
+                shuffle=self.shuffle,
             )
         logging.info("About to create train dataloader")
 
@@ -207,7 +146,7 @@ class TtsDataModule:
             train,
             sampler=train_sampler,
             batch_size=None,
-            num_workers=self.args.num_workers,
+            num_workers=self.num_workers,
             persistent_workers=False,
             worker_init_fn=worker_init_fn,
         )
@@ -218,16 +157,15 @@ class TtsDataModule:
         logging.info("About to create dev dataset")
         validate = SpeechSynthesisDataset(
             return_text=True,
-            return_tokens=True,
             return_spk_ids=True,
             feature_input_strategy=OnTheFlyFeatures(VocosFbank())
-            if self.args.on_the_fly_feats
+            if self.on_the_fly_feats
             else PrecomputedFeatures(),
-            return_cuts=self.args.return_cuts,
+            return_cuts=self.return_cuts,
         )
         dev_sampler = DynamicBucketingSampler(
             cuts_valid,
-            max_duration=self.args.max_duration,
+            max_duration=self.max_duration,
             shuffle=False,
         )
         logging.info("About to create valid dataloader")
@@ -245,17 +183,16 @@ class TtsDataModule:
         logging.info("About to create test dataset")
         test = SpeechSynthesisDataset(
             return_text=True,
-            return_tokens=True,
             return_spk_ids=True,
             feature_input_strategy=OnTheFlyFeatures(VocosFbank())
-            if self.args.on_the_fly_feats
+            if self.on_the_fly_feats
             else PrecomputedFeatures(),
-            return_cuts=self.args.return_cuts,
+            return_cuts=self.return_cuts,
             return_audio=True,
         )
         test_sampler = DynamicBucketingSampler(
             cuts,
-            max_duration=self.args.max_duration,
+            max_duration=self.max_duration,
             shuffle=False,
         )
         logging.info("About to create test dataloader")
@@ -263,7 +200,7 @@ class TtsDataModule:
             test,
             batch_size=None,
             sampler=test_sampler,
-            num_workers=self.args.num_workers,
+            num_workers=self.num_workers,
         )
         return test_dl
 
@@ -280,25 +217,25 @@ class TtsDataModule:
     @lru_cache()
     def train_emilia_EN_cuts(self) -> CutSet:
         logging.info("About to get train the EN subset")
-        return load_manifest_lazy(self.args.manifest_dir / "emilia_cuts_EN.jsonl.gz")
+        return load_manifest_lazy(self.manifest_dir / "emilia_cuts_EN.jsonl.gz")
 
     @lru_cache()
     def train_emilia_ZH_cuts(self) -> CutSet:
         logging.info("About to get train the ZH subset")
-        return load_manifest_lazy(self.args.manifest_dir / "emilia_cuts_ZH.jsonl.gz")
+        return load_manifest_lazy(self.manifest_dir / "emilia_cuts_ZH.jsonl.gz")
 
     @lru_cache()
     def dev_emilia_EN_cuts(self) -> CutSet:
         logging.info("About to get dev the EN subset")
         return load_manifest_lazy(
-            self.args.manifest_dir / "emilia_cuts_EN-dev.jsonl.gz"
+            self.manifest_dir / "emilia_cuts_EN-dev.jsonl.gz"
         )
 
     @lru_cache()
     def dev_emilia_ZH_cuts(self) -> CutSet:
         logging.info("About to get dev the ZH subset")
         return load_manifest_lazy(
-            self.args.manifest_dir / "emilia_cuts_ZH-dev.jsonl.gz"
+            self.manifest_dir / "emilia_cuts_ZH-dev.jsonl.gz"
         )
 
     @lru_cache()
@@ -308,40 +245,40 @@ class TtsDataModule:
             train-clean-360 and train-other-500 cuts"
         )
         return load_manifest_lazy(
-            self.args.manifest_dir / "libritts_cuts_train-all-shuf.jsonl.gz"
+            self.manifest_dir / "libritts_cuts_train-all-shuf.jsonl.gz"
         )
 
     @lru_cache()
     def dev_libritts_cuts(self) -> CutSet:
         logging.info("About to get dev-clean cuts")
         return load_manifest_lazy(
-            self.args.manifest_dir / "libritts_cuts_dev-clean.jsonl.gz"
+            self.manifest_dir / "libritts_cuts_dev-clean.jsonl.gz"
         )
 
     @lru_cache()
     def train_opendialog_en_cuts(self) -> CutSet:
         logging.info("About to ge the EN train subset of OpenDialog")
         return load_manifest_lazy(
-            self.args.manifest_dir / "opendialog_cuts_EN-train.jsonl.gz"
+            self.manifest_dir / "opendialog_cuts_EN-train.jsonl.gz"
         )
 
     @lru_cache()
     def train_opendialog_zh_cuts(self) -> CutSet:
         logging.info("About to get the ZH train subset of OpenDialog")
         return load_manifest_lazy(
-            self.args.manifest_dir / "opendialog_cuts_ZH-train.jsonl.gz"
+            self.manifest_dir / "opendialog_cuts_ZH-train.jsonl.gz"
         )
 
     @lru_cache()
     def dev_opendialog_en_cuts(self) -> CutSet:
         logging.info("About to ge the EN dev subset of OpenDialog")
         return load_manifest_lazy(
-            self.args.manifest_dir / "opendialog_cuts_EN-dev.jsonl.gz"
+            self.manifest_dir / "opendialog_cuts_EN-dev.jsonl.gz"
         )
 
     @lru_cache()
     def dev_opendialog_zh_cuts(self) -> CutSet:
         logging.info("About to get the ZH dev subset of OpenDialog")
         return load_manifest_lazy(
-            self.args.manifest_dir / "opendialog_cuts_ZH-dev.jsonl.gz"
+            self.manifest_dir / "opendialog_cuts_ZH-dev.jsonl.gz"
         )

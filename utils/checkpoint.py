@@ -106,13 +106,18 @@ def save_checkpoint(
 
 def load_checkpoint(
     filename: Path,
+    filename_disc: Path,
     model: Optional[nn.Module] = None,
     model_avg: Optional[nn.Module] = None,
+    discriminator: Optional[nn.Module] = None,
+    discriminator_avg: Optional[nn.Module] = None,
     model_ema: Optional[nn.Module] = None,
     strict: bool = False,
 ) -> Dict[str, Any]:
     logging.info(f"Loading checkpoint from {filename}")
     checkpoint = torch.load(filename, map_location="cpu", weights_only=False)
+    logging.info(f"Loading discriminator checkpoint from {filename_disc}")
+    checkpoint_disc = torch.load(filename_disc, map_location="cpu", weights_only=False)
 
     if model is not None:
 
@@ -131,17 +136,39 @@ def load_checkpoint(
 
         checkpoint.pop("model")
 
+    if discriminator is not None:
+
+        if next(iter(checkpoint_disc["model"])).startswith("module."):
+            logging.debug("Loading checkpoint saved by DDP")
+            dst_state_dict = discriminator.state_dict()
+            src_state_dict = checkpoint_disc["model"]
+            for key in dst_state_dict.keys():
+                src_key = "{}.{}".format("module", key)
+                dst_state_dict[key] = src_state_dict.pop(src_key)
+            assert len(src_state_dict) == 0
+            discriminator.load_state_dict(dst_state_dict, strict=strict)
+        else:
+            logging.debug("Loading checkpoint")
+            discriminator.load_state_dict(checkpoint_disc["model"], strict=strict)
+
+        checkpoint_disc.pop("model")
+
     if model_avg is not None and "model_avg" in checkpoint:
         logging.info("Loading averaged model")
         model_avg.load_state_dict(checkpoint["model_avg"], strict=strict)
         checkpoint.pop("model_avg")
+
+    if discriminator_avg is not None and "model_avg" in checkpoint_disc:
+        logging.info("Loading averaged model")
+        discriminator_avg.load_state_dict(checkpoint_disc["model_avg"], strict=strict)
+        checkpoint_disc.pop("model_avg")
 
     if model_ema is not None and "model_ema" in checkpoint:
         logging.info("Loading ema model")
         model_ema.load_state_dict(checkpoint["model_ema"], strict=strict)
         checkpoint.pop("model_ema")
 
-    return checkpoint
+    return checkpoint, checkpoint_disc
 
 
 def load_checkpoint_extend_vocab_size(
@@ -402,6 +429,8 @@ def resume_checkpoint(
     params: AttributeDict,
     model: nn.Module,
     model_avg: nn.Module,
+    discriminator: nn.Module,
+    discriminator_avg: nn.Module,
     model_ema: Optional[nn.Module] = None,
 ) -> Optional[Dict[str, Any]]:
     """Load checkpoint from file.
@@ -422,13 +451,17 @@ def resume_checkpoint(
       Return a dict containing previously saved training info.
     """
     filename = params.exp_dir / f"epoch-{params.start_epoch - 1}.pt"
+    filename_disc = params.exp_dir / f"epoch-{params.start_epoch - 1}_disc.pt"
 
     assert filename.is_file(), f"{filename} does not exist!"
 
     saved_params = load_checkpoint(
-        filename,
+        filename=filename,
+        filename_disc=filename_disc,
         model=model,
         model_avg=model_avg,
+        discriminator=discriminator,
+        discriminator_avg=discriminator_avg,
         model_ema=model_ema,
         strict=True,
     )

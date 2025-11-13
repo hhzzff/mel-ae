@@ -21,7 +21,6 @@ class SpeechSynthesisDataset(torch.utils.data.Dataset):
             'audio_lens': (B, ) int tensor
             'features_lens': (B, ) int tensor
             'text': List[str] of len B  # when return_text=True
-            'tokens': List[List[str]]  # when return_tokens=True
             'speakers': List[str] of len B  # when return_spk_ids=True
             'cut': List of Cuts  # when return_cuts=True
         }
@@ -33,7 +32,6 @@ class SpeechSynthesisDataset(torch.utils.data.Dataset):
         feature_input_strategy: BatchIO = PrecomputedFeatures(),
         feature_transforms: Union[Sequence[Callable], Callable] = None,
         return_text: bool = True,
-        return_tokens: bool = False,
         return_spk_ids: bool = False,
         return_cuts: bool = False,
         return_audio: bool = False,
@@ -44,7 +42,6 @@ class SpeechSynthesisDataset(torch.utils.data.Dataset):
         self.feature_input_strategy = feature_input_strategy
 
         self.return_text = return_text
-        self.return_tokens = return_tokens
         self.return_spk_ids = return_spk_ids
         self.return_cuts = return_cuts
         self.return_audio = return_audio
@@ -83,10 +80,6 @@ class SpeechSynthesisDataset(torch.utils.data.Dataset):
         if self.return_text:
             text = [cut.supervisions[0].text for cut in cuts]
             batch["text"] = text
-
-        if self.return_tokens:
-            tokens = [cut.supervisions[0].tokens for cut in cuts]
-            batch["tokens"] = tokens
 
         if self.return_spk_ids:
             batch["speakers"] = [cut.supervisions[0].speaker for cut in cuts]
